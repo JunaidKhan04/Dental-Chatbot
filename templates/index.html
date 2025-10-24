@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Dental Chatbot</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        /* Additional CSS for stop button */
+        .stop-btn {
+            background-color: #ff4d4d;
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            margin-left: 10px;
+            font-size: 12px;
+            transition: opacity 0.3s;
+            opacity: 0; /* Initially hidden */
+        }
+        .stop-btn.visible { opacity: 1; }
+        .stop-btn:hover { background-color: #e60000; }
+        .bot-controls { display: flex; align-items: center; justify-content: space-between; gap:10px; }
+        .bot-controls .bubble { flex: 1; }
+        #micBtn { background-color: #e0e0e0; border: 1px solid #ccc; color: #333; border-radius: 6px; cursor: pointer; transition: background 0.3s; }
+        #micBtn:hover { background-color: #d0d0d0; }
+        #micBtn.listening { background-color: #ff4d4d; color: white; }
+        #micBtn.listening:hover { background-color: #e60000; }
+        .bubble.bot { white-space: pre-line; }
+        .bubble.bot strong { color: #0066cc; }
+        .typing-indicator .dot { display:inline-block; width:6px; height:6px; background:#999; border-radius:50%; margin:0 2px; animation: blink 1s infinite; }
+        @keyframes blink { 0% {opacity:0.2} 50% {opacity:1} 100% {opacity:0.2} }
+    
+            
+        /* Inline chart styles */
+        .inline-chart {
+            background-color: #f8f9fa;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 10px 0;
+            border: 1px solid #e9ecef;
+            max-width: 100%;
+        }
+        
+        .inline-chart-title {
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: #333;
+            text-align: center;
+        }
+        
+        .inline-chart-canvas {
+            max-height: 400px;
+            width: 100% !important;
+            height: auto !important;
+        }
+        
+        .inline-chart-info {
+            margin-top: 10px;
+            font-size: 12px;
+            color: #666;
+            text-align: center;
+        }
+
+    </style>
+</head>
+<body>
+<div class="main-card">
+    <div class="header">
+        <h2>Dental Chatbot </h2>
+        <span class="status"><i class="fa fa-circle"></i> Online</span>
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      <div class="flash-container">
+        {% for category, message in messages %}
+          <div class="flash-message {{ category }}">
+            {{ message }}
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+    {% endwith %}
+
+    <div style="display: flex; justify-content: flex-end; padding: 10px;">
+        <!-- Left side: CSV Upload (Hidden) -->
+        <form method="POST" enctype="multipart/form-data" action="/upload" class="upload-form" style="display: none; flex-direction: column; align-items: flex-start;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <label for="fileUpload" class="custom-file-upload">📂 Choose CSV File</label>
+                <input type="file" name="file" id="fileUpload" required style="display:none;">
+                <button type="submit">Upload</button>
+            </div>
+            <span id="fileName" style="font-size: 12px; margin-top: 5px; color: #666;"></span>
+            <span style="font-size: 12px;font-weight: bold ; color: #666; margin-top: 5px;">Upload CSV file</span>
+        </form>
+
+        <!-- Right side: Clear & Speak Toggle -->
+        <div style="display: flex; gap: 10px; align-items: center;">
+            <button type="button" id="clearChatBtn" title="Clear Chat" style="background-color: #f0f0f0; border: 1px solid #ccc; color: #333; padding: 6px 12px; font-size: 13px; border-radius: 6px; cursor: pointer; transition: background 0.3s;">
+              <i class="fa fa-broom"></i>
+            </button>
+
+            <button type="button" id="speakToggle" class="off" title="Toggle speak" style="background-color: #e0e0e0; border: 1px solid #ccc; color: #333; padding: 6px 12px; font-size: 13px; border-radius: 6px; cursor: pointer; transition: background 0.3s;">
+              🔇
+            </button>
+        </div>
+    </div>
+
+    <div class="chat-box" id="chatHistory">
+        {% if history %}
+            {% for message, response in history %}
+                <div class="chat-entry user-msg">
+                    <div class="bubble user">{{ message }}</div>
+                </div>
+                <div class="chat-entry bot-msg">
+                    <div class="bot-controls">
+                        <div class="bubble bot">{{ response }}</div>
+                    </div>
+                </div>
+            {% endfor %}
+        {% else %}
+            <div class="chat-entry bot-msg">
+                <div class="bot-controls">
+                    <div class="bubble bot">Hello! I'm ready to assist you. How can I help you today?</div>
+                </div>
+            </div>
+        {% endif %}
+    </div>
+
+    <form id="chatForm" class="message-form">
+        <input type="text" id="messageInput" name="message" placeholder="Ask about Dental data ..." required>
+        <button type="submit" title="Send"><i class="fa fa-paper-plane"></i></button>
+        <button type="button" id="micBtn" title="Speak"><i class="fa fa-microphone"></i></button>
+    </form>
+</div>
+
+<script>
+/* ====== ELEMENTS ====== */
+const chatForm = document.getElementById("chatForm");
+const chatHistory = document.getElementById("chatHistory");
+const messageInput = document.getElementById("messageInput");
+const micBtn = document.getElementById("micBtn");
+const clearChatBtn = document.getElementById("clearChatBtn");
+const speakToggle = document.getElementById("speakToggle");
+
+let speakEnabled = false;  // speaking OFF by default as you wanted
+let isListening = false;   // track if voice recognition is active
+
+/* ====== Speak toggle ====== */
+speakToggle.addEventListener("click", () => {
+    speakEnabled = !speakEnabled;
+    if (speakEnabled) {
+        speakToggle.textContent = "🔊";
+        speakToggle.classList.remove("off");
+        // Speak last bot message immediately when turned ON
+        speakLastBotMessage();
+    } else {
+        speakToggle.textContent = "🔇";
+        speakToggle.classList.add("off");
+        if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+    }
+});
+
+/* ====== Helper to clean table text for speaking ====== */
+function getCleanTextFromTable(tableElem) {
+    let rawText = tableElem.textContent || "";
+    let cleaned = rawText
+      .replace(/\s+/g, ' ')   // collapse all whitespace/newlines/tabs into single space
+      .trim();
+    return cleaned;
+}
+
+/* ====== Speak last bot message ====== */
+function speakLastBotMessage() {
+    if (!speakEnabled || !('speechSynthesis' in window)) return;
+
+    const lastBotBubble = chatHistory.querySelector(".chat-entry.bot-msg:last-child .bubble.bot");
+    if (!lastBotBubble) return;
+
+    let speakText = "";
+
+    const tableElem = lastBotBubble.querySelector('table');
+    if (tableElem) {
+        speakText = getCleanTextFromTable(tableElem);
+    } else {
+        speakText = lastBotBubble.textContent.trim();
+        if (speakText.toLowerCase().startsWith('bot:')) {
+            speakText = speakText.substring(4).trim();
+        }
+    }
+
+    if (speakText) {
+        const utterance = new SpeechSynthesisUtterance(speakText);
+        utterance.lang = 'en-US';
+        window.speechSynthesis.speak(utterance);
+    }
+}
+
+/* ====== Submit handler (main) ====== */
+chatForm.addEventListener("submit", async function (e) {
+    e.preventDefault();
+    const message = messageInput.value.trim();
+    if (!message) return;
+
+    // Append user message
+    chatHistory.insertAdjacentHTML("beforeend", `
+        <div class="chat-entry user-msg">
+            <div class="bubble user"><strong>You:</strong> ${message}</div>
+        </div>
+    `);
+    chatHistory.scrollTop = chatHistory.scrollHeight;
+    messageInput.value = "";
+
+    // Create typing indicator + hidden stop button
+    const typingElement = document.createElement("div");
+    typingElement.classList.add("chat-entry", "bot-msg", "typing-indicator");
+    typingElement.innerHTML = `
+        <div class="bot-controls">
+            <div class="bubble bot typing">
+                <strong>Bot:</strong> <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+            </div>
+            <button class="stop-btn" title="Stop Execution">⏹</button>
+        </div>
+    `;
+    chatHistory.appendChild(typingElement);
+    chatHistory.scrollTop = chatHistory.scrollHeight;
+
+    const stopBtn = typingElement.querySelector('.stop-btn');
+
+    // Show stop button after 1s
+    const stopButtonTimer = setTimeout(() => {
+        if (stopBtn) stopBtn.classList.add('visible');
+    }, 1000);
+
+    // Stop button handler
+    stopBtn.addEventListener("click", async () => {
+        try {
+            await fetch("/stop_execution", { method: "POST", headers: { "Content-Type": "application/json" } });
+            // Remove typing indicator and show stopped message
+            if (typingElement.parentNode) typingElement.remove();
+            chatHistory.insertAdjacentHTML("beforeend", `
+                <div class="chat-entry bot-msg">
+                    <div class="bot-controls">
+                        <div class="bubble bot">Request stopped by user.</div>
+                    </div>
+                </div>
+            `);
+            chatHistory.scrollTop = chatHistory.scrollHeight;
+        } catch (err) {
+            console.error("Error stopping execution:", err);
+        }
+    });
+
+    // Send message to server
+    try {
+        const res = await fetch("/ask", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ message })
+        });
+
+        // stop button visibility timer cleared
+        clearTimeout(stopButtonTimer);
+
+        // parse response safely
+        const data = await res.json();
+
+        // If server explicitly signals stopped, do not process response
+        if (data && data.status === "stopped") {
+            if (typingElement.parentNode) typingElement.remove();
+            return;
+        }
+
+        // Remove typing indicator (if still present)
+        if (typingElement.parentNode) typingElement.remove();
+
+        // Only render if there is a real response
+        if (data && data.response) {
+
+            // Check if it's chart data
+            if (data.response.startsWith('CHART_DATA:')) {
+                const chartDataJson = data.response.replace('CHART_DATA:', '');
+                try {
+                    const chartData = JSON.parse(chartDataJson);
+                    console.log('Parsed chart data:', chartData);
+                    renderInlineChart(chartData);
+                    return; // Exit early after rendering chart
+                } catch (e) {
+                    console.error('Error parsing chart data:', e);
+                    chatHistory.insertAdjacentHTML("beforeend", `
+                        <div class="chat-entry bot-msg">
+                            <div class="bot-controls">
+                                <div class="bubble bot"><strong>Bot:</strong> Error rendering chart: ${e.message}</div>
+                            </div>
+                        </div>
+                    `);
+                    return;
+                }
+            }
+            
+            // table vs plain text rendering
+            if (data.response.includes('<table')) {
+                const wrapper = document.createElement('div');
+                wrapper.className = 'chat-entry bot-msg';
+                wrapper.innerHTML = `
+                    <div class="bot-controls">
+                        <div class="bubble bot"><strong>Bot:</strong> ${data.response}</div>
+                    </div>
+                `;
+                chatHistory.appendChild(wrapper);
+            } else {
+                // escape < and > to avoid injecting HTML
+                const escaped = data.response.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                chatHistory.insertAdjacentHTML("beforeend", `
+                    <div class="chat-entry bot-msg">
+                        <div class="bot-controls">
+                            <div class="bubble bot"><strong>Bot:</strong> ${escaped}</div>
+                        </div>
+                    </div>
+                `);
+            }
+            chatHistory.scrollTop = chatHistory.scrollHeight;
+
+            // Speak last bot message if enabled
+            speakLastBotMessage();
+        }
+
+    } catch (error) {
+        clearTimeout(stopButtonTimer);
+        if (typingElement.parentNode) typingElement.remove();
+
+        chatHistory.insertAdjacentHTML("beforeend", `
+            <div class="chat-entry bot-msg">
+                <div class="bot-controls">
+                    <div class="bubble bot">Error: ${error.message}</div>
+                </div>
+            </div>
+        `);
+        chatHistory.scrollTop = chatHistory.scrollHeight;
+        console.error("Send error:", error);
+    }
+});
+
+/* ====== Voice recognition (webkitSpeechRecognition fallback) ====== */
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+if (SpeechRecognition) {
+    const recognition = new SpeechRecognition();
+    recognition.lang = 'en-US';
+    recognition.continuous = false;
+
+    micBtn.addEventListener("click", () => {
+        if (!isListening) {
+            recognition.start();
+            isListening = true;
+            micBtn.innerHTML = '<i class="fa fa-stop"></i>';
+            micBtn.classList.add('listening');
+            micBtn.title = "Stop Listening";
+        } else {
+            recognition.stop();
+            resetMicButton();
+        }
+    });
+
+    recognition.onresult = function(event) {
+        const transcript = event.results[0][0].transcript;
+        messageInput.value = transcript;
+        resetMicButton();
+
+        // Auto submit form on voice result
+        chatForm.dispatchEvent(new Event('submit', {cancelable: true, bubbles: true}));
+    };
+
+    recognition.onerror = function(event) {
+        console.error("Speech recognition error", event.error);
+        resetMicButton();
+    };
+
+    recognition.onend = function() {
+        resetMicButton();
+    };
+
+    function resetMicButton() {
+        isListening = false;
+        micBtn.innerHTML = '<i class="fa fa-microphone"></i>';
+        micBtn.classList.remove('listening');
+        micBtn.title = "Speak";
+    }
+
+} else {
+    micBtn.disabled = true;
+    micBtn.title = "Voice not supported";
+}
+
+/* ====== File input display ====== */
+document.getElementById("fileUpload").addEventListener("change", function () {
+    const file = this.files[0];
+    const fileName = file ? file.name : "No file chosen";
+    document.getElementById("fileName").textContent = fileName;
+});
+
+/* ====== Clear chat button ====== */
+clearChatBtn.addEventListener("click", async () => {
+    const res = await fetch("/clear_chat", { method: "POST" });
+    if (res.ok) {
+        chatHistory.innerHTML = `
+            <div class="chat-entry bot-msg">
+                <div class="bot-controls">
+                    <div class="bubble bot">Hello! I'm ready to assist you. How can I help you today?</div>
+                </div>
+            </div>
+        `;
+        messageInput.value = "";
+        messageInput.focus();
+    } else {
+        alert("Failed to clear chat history.");
+    }
+});
+
+/* ====== Inline Chart Rendering ====== */
+function renderInlineChart(chartData) {
+    console.log('renderInlineChart called with data:', chartData);
+    
+    // Create unique ID for this chart
+    const chartId = 'inline-chart-' + Date.now();
+    
+    // Create chart container
+    const chartContainer = document.createElement('div');
+    chartContainer.className = 'chat-entry bot-msg';
+    chartContainer.innerHTML = `
+        <div class="bot-controls">
+            <div class="bubble bot" style="max-width: 90%; padding: 5px;">
+                <div class="inline-chart">
+                    <div class="inline-chart-title">${chartData.title}</div>
+                    <canvas id="${chartId}" class="inline-chart-canvas" width="400" height="300"></canvas>
+                    <div class="inline-chart-info">
+                        ${chartData.total_records ? `Total records: ${chartData.total_records}` : ''}
+                        ${chartData.metadata && chartData.metadata.total_sum ? ` | Total sum: ${chartData.metadata.total_sum}` : ''}
+                        ${chartData.metadata && chartData.metadata.overall_average ? ` | Average: ${chartData.metadata.overall_average.toFixed(2)}` : ''}
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    // Add to chat history
+    chatHistory.appendChild(chartContainer);
+    chatHistory.scrollTop = chatHistory.scrollHeight;
+    
+    // Create the chart after a small delay to ensure canvas is in DOM
+    setTimeout(() => {
+        const canvas = document.getElementById(chartId);
+        console.log('Canvas element found:', !!canvas);
+        console.log('Chart.js available:', typeof Chart !== 'undefined');
+        
+        if (canvas && typeof Chart !== 'undefined') {
+            try {
+                const ctx = canvas.getContext('2d');
+                console.log('Creating chart with data:', {
+                    labels: chartData.labels,
+                    values: chartData.values,
+                    type: chartData.chart_type
+                });
+                
+                const chart = new Chart(ctx, {
+                    type: chartData.chart_type,
+                    data: {
+                        labels: chartData.labels,
+                        datasets: [{
+                            label: 'Count',
+                            data: chartData.values,
+                            backgroundColor: [
+                                'rgba(255, 99, 132, 0.7)',
+                                'rgba(54, 162, 235, 0.7)',
+                                'rgba(255, 206, 86, 0.7)',
+                                'rgba(75, 192, 192, 0.7)',
+                                'rgba(153, 102, 255, 0.7)',
+                                'rgba(255, 159, 64, 0.7)',
+                                'rgba(199, 199, 199, 0.7)',
+                                'rgba(83, 102, 255, 0.7)',
+                                'rgba(40, 159, 64, 0.7)',
+                                'rgba(210, 99, 132, 0.7)',
+                                'rgba(20, 162, 235, 0.7)'
+                            ],
+                            borderColor: [
+                                'rgba(255, 99, 132, 1)',
+                                'rgba(54, 162, 235, 1)',
+                                'rgba(255, 206, 86, 1)',
+                                'rgba(75, 192, 192, 1)',
+                                'rgba(153, 102, 255, 1)',
+                                'rgba(255, 159, 64, 1)',
+                                'rgba(199, 199, 199, 1)',
+                                'rgba(83, 102, 255, 1)',
+                                'rgba(40, 159, 64, 1)',
+                                'rgba(210, 99, 132, 1)',
+                                'rgba(20, 162, 235, 1)'
+                            ],
+                            borderWidth: 1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                position: chartData.chart_type === 'pie' || chartData.chart_type === 'doughnut' ? 'right' : 'top',
+                                labels: {
+                                    boxWidth: 12,
+                                    font: {
+                                        size: 11
+                                    }
+                                }
+                            },
+                            title: {
+                                display: false  // We show title separately
+                            }
+                        },
+                        scales: chartData.chart_type === 'pie' || chartData.chart_type === 'doughnut' ? {} : {
+                            y: {
+                                beginAtZero: true,
+                                ticks: {
+                                    font: {
+                                        size: 10
+                                    }
+                                }
+                            },
+                            x: {
+                                ticks: {
+                                    font: {
+                                        size: 10
+                                    },
+                                    maxRotation: 45
+                                }
+                            }
+                        }
+                    }
+                });
+                
+                console.log('Chart created successfully:', chart);
+            } catch (error) {
+                console.error('Error creating chart:', error);
+                canvas.parentElement.innerHTML = '<div style="color: red;">Error creating chart: ' + error.message + '</div>';
+            }
+        } else {
+            console.error('Canvas or Chart.js not available');
+            if (canvas) {
+                canvas.parentElement.innerHTML = '<div style="color: red;">Chart.js library not loaded</div>';
+            }
+        }
+    }, 100);
+}
+</script>
+
+</body>
+</html>
